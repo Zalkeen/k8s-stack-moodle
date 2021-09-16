@@ -1,0 +1,214 @@
+---
+
+kind: Deployment
+apiVersion: apps/v1
+metadata:
+  name: moodle
+  namespace: namespace-name
+spec:
+  selector:
+    matchLabels:
+      service: moodle
+  template:
+    metadata:
+      labels:
+        service: moodle
+    spec:
+      containers:
+      - name: moodle
+        image: "docker.domain.tld/packages/moodle:3"
+        imagePullPolicy: Always
+        env:
+        - name: BITNAMI_DEBUG
+          value: "true"
+        - name: MOODLE_USERNAME
+          value: "namespace-name"
+        - name: MOODLE_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: moodle-secrets
+              key: adminpw
+        - name: MARIADB_HOST
+          value: "moodle-db"
+        - name: MARIADB_PORT_NUMBER
+          value: "3306"
+        - name: MOODLE_DATABASE_NAME
+          value: "moodle"
+        - name: MOODLE_DATABASE_USER
+          value: "moodle"
+        - name: MOODLE_DATABASE_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: moodle-secrets
+              key: dbpw
+        ports:
+        - name: http
+          containerPort: 8080
+        volumeMounts:
+        - mountPath: "/bitnami/moodle"
+          name: moodle-data
+        - mountPath: "/bitnami/moodledata"
+          name: moodle-moodledata
+        - mountPath: "/bitnami/moodledata/temp"
+          name: moodle-tmp
+      volumes:
+      - name: moodle-data
+        hostPath:
+          path: "/cluster/namespace-name/moodle/data"
+          type: "DirectoryOrCreate"
+      - name: moodle-moodledata
+        hostPath:
+          path: "/cluster/namespace-name/moodle/moodledata"
+          type: "DirectoryOrCreate"
+      - name: moodle-tmp
+        hostPath:
+          path: "/tmp/cluster/namespace-name/moodle/tmp"
+          type: "DirectoryOrCreate"
+
+---
+
+kind: Deployment
+apiVersion: apps/v1
+metadata:
+  name: moodle-db
+  namespace: namespace-name
+spec:
+  selector:
+    matchLabels:
+      service: moodle-db
+  template:
+    metadata:
+      labels:
+        service: moodle-db
+    spec:
+      nodeSelector:
+        storageaccess: direct
+      containers:
+      - name: moodle-db
+        image: "mariadb:10.3.23"
+        env:
+        - name: MYSQL_ROOT_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: moodle-secrets
+              key: dbpw
+        - name: MYSQL_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: moodle-secrets
+              key: dbpw
+        - name: MYSQL_DATABASE
+          value: "moodle"
+        - name: MYSQL_USER
+          value: "moodle"
+        volumeMounts:
+        - mountPath: "/var/lib/mysql"
+          name: moodle-db
+      volumes:
+      - name: moodle-db
+        hostPath:
+          path: "/cluster/namespace-name/moodle/db"
+          type: "DirectoryOrCreate"
+
+---
+
+kind: Deployment
+apiVersion: apps/v1
+metadata:
+  name: moodle-kvdb
+  namespace: namespace-name
+spec:
+  selector:
+    matchLabels:
+      service: moodle-kvdb
+  template:
+    metadata:
+      labels:
+        service: moodle-kvdb
+    spec:
+      volumes:
+      - name: moodle-kvdb
+        hostPath:
+          path: "/cluster/namespace-name/moodle/kvdb"
+          type: "DirectoryOrCreate"
+      containers:
+        - name: "moodle-kvdb"
+          image: "redis:latest"
+          args:
+          - --loglevel warning
+          - --requirepass $(REDIS_PASSWORD)
+          env:
+          - name: REDIS_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: moodle-secrets
+                key: kvdbpw
+          volumeMounts:
+          - mountPath: "/var/lib/redis"
+            name: moodle-kvdb
+
+---
+
+kind: Service
+apiVersion: v1
+metadata:
+  name: moodle
+  namespace: namespace-name
+spec:
+  selector:
+    service: moodle
+  ports:
+  - protocol: TCP
+    port: 8080
+    name: http
+
+---
+
+kind: Service
+apiVersion: v1
+metadata:
+  name: moodle-db
+  namespace: namespace-name
+spec:
+  selector:
+    service: moodle-db
+  ports:
+  - protocol: TCP
+    port: 3306
+    name: mysql
+
+---
+
+kind: Service
+apiVersion: v1
+metadata:
+  name: moodle-kvdb
+  namespace: namespace-name
+spec:
+  selector:
+    service: moodle-kvdb
+  ports:
+  - protocol: TCP
+    port: 6379
+    name: db
+
+---
+
+kind: Ingress
+apiVersion: networking.k8s.io/v1beta1
+metadata:
+  name: moodle
+  namespace: namespace-name
+  annotations:
+    kubernetes.io/ingress.class: traefik
+    traefik.frontend.passHostHeader: "true"
+spec:
+  rules:
+  - host: moodle.namespace-name-project.eu
+    http:
+      paths:
+      - path: /
+        backend:
+          serviceName: moodle
+          servicePort: http
+
